@@ -1,0 +1,69 @@
+# Версия docker-compose
+version: '3'
+
+# Перечень volume
+volumes:
+  pg_data:
+  # Новый volume — для статических файлов
+  static:
+
+# Перечень контейнеров
+services:
+  # Имя и описание первого контейнера; имя выбирает разработчик.
+  # Это контейнер БД
+  db:
+    # Из какого образа запустить контейнер:
+    image: postgres:13.10
+    # Файл (или список файлов) с переменными окружения
+    env_file: .env
+    # Какой volume подключить для этого контейнера
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Имя и описание контейнера с бэкендом
+  backend:
+    # Из какого Dockerfile собирать образ для этого контейнера:
+    #build: ./backend/
+    image: shipilovnv/taski_backend:latest
+    env_file: .env
+    # Какие контейнеры нужно запустить до старта этого контейнера:
+    depends_on:
+      db:
+        condition: service_healthy
+    # Тут подключаем volume к backend
+    volumes:
+      - static:/backend_static
+    command: sh -c "python manage.py migrate && gunicorn --bind 0.0.0.0:8000 backend.wsgi && python manage.py collectstatic && cp -r /app/collected_static/. /backend_static/static/"
+
+  # Имя третьего контейнера. Это контейнер с фронтендом
+  frontend:
+    #build: ./frontend/
+    image: shipilovnv/taski_frontend:latest
+    env_file: .env
+    volumes:
+      - static:/frontend_static
+    command: cp -r /app/build/. /frontend_static/
+# Добавляем новый контейнер: gateway
+  gateway:
+    # Сбилдить и запустить образ,
+    # описанный в Dockerfile в папке gateway
+    # build: ./gateway/
+    image: nginx:1.22.1
+    env_file: .env
+    # Какие контейнеры нужно запустить до старта этого контейнера:
+    depends_on:
+      - backend
+    # А тут подключаем volume со статикой к gateway
+    volumes:
+      - static:/staticfiles/
+      - ./gateway/nginx.conf:/etc/nginx/templates/default.conf.template
+    # Ключ ports устанавливает
+    # перенаправление всех запросов с порта 8000 хоста
+    # на порт 80 контейнера
+    ports:
+      - 8001:80
